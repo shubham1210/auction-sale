@@ -46,6 +46,8 @@ a{color:var(--accent)}
 .search svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted)}
 .hacts{display:flex;gap:8px;align-items:center;position:relative}
 .upbtn{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:9px 14px;cursor:pointer;font-weight:600;font-size:14px}
+.sbar{height:6px;background:var(--soft);border-radius:9px;overflow:hidden}.sbar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.bridge{margin-top:12px;border-top:1px solid var(--line);padding-top:12px;font-size:13.5px}.bridge ol{margin:8px 0;padding-left:20px;display:grid;gap:8px}.bridge p{margin:0}.bmk{cursor:grab;background:var(--sticker);color:var(--sticker-ink);border-color:var(--sticker);padding:6px 12px;margin-left:4px}
 .pop{position:absolute;right:0;top:calc(100% + 8px);width:min(420px,calc(100vw - 32px));max-height:calc(100vh - 120px);overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:16px;z-index:45}
 .pop[hidden]{display:none}
 .pop h3{margin:0 0 6px;font-size:15px}
@@ -249,6 +251,7 @@ footer p{max-width:80ch;margin:0 0 8px}
 }
 @media (prefers-reduced-motion:reduce){.drawer,.scrim,.filters{transition:none}}
 </style>
+<script src="bfa-sync.js" defer></script>
 </head>
 <body>
 <header class="top">
@@ -259,6 +262,25 @@ footer p{max-width:80ch;margin:0 0 8px}
       <input id="q" type="search" placeholder="Search items: treadmill, chimney, sneakers…" autocomplete="off">
     </label>
     <div class="hacts">
+    <button class="upbtn" id="syncBtn" type="button" aria-expanded="false" aria-controls="syncPop" title="Sync with BuyFromAuction">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></svg><span class="lbl">Sync</span></button>
+    <div class="pop" id="syncPop" hidden>
+      <h3>Sync with BuyFromAuction</h3>
+      <div class="src" id="syncInfo"></div>
+      <div class="row"><button class="btn" id="syncNew" type="button">Sync new items</button><button class="btn" id="syncFull" type="button">Full refresh</button></div>
+      <p style="margin:10px 0 0;font-size:12.5px">“Sync new items” adds products published since your last sync, usually in seconds. “Full refresh” reloads every in-stock product and drops sold-out ones; it can take a few minutes. New batches usually finish by 6 PM, Monday to Saturday.</p>
+      <p id="syncMissing" hidden style="margin:10px 0 0;font-size:13px;color:var(--bad)">Sync needs the file bfa-sync.js next to this page. It works on your GitHub Pages copy, not inside claude.ai.</p>
+      <div id="syncProg" hidden style="margin-top:12px"><div class="sbar"><i id="syncBar"></i></div><p id="syncStatus" style="margin:8px 0 0;font-size:13px;color:var(--ink)"></p><button class="linkbtn" id="syncCancel" type="button">Cancel</button></div>
+      <div id="bridge" hidden class="bridge">
+        <p id="bridgeNote" style="color:var(--ink)"><b>Your browser blocked this page from reading the shop directly.</b> The shop’s own tab can read it instead, using a bookmark.</p>
+        <ol>
+          <li>One time only: drag this button to your bookmarks bar. <a class="btn bmk" id="bmk" href="#">BFA Sync</a></li>
+          <li><button class="btn pri" id="openShop" type="button">Open the shop tab</button></li>
+          <li>On the shop tab, click the <b>BFA Sync</b> bookmark. The products come back here automatically.</li>
+        </ol>
+        <p style="font-size:12.5px">If the bookmark doesn’t work, <button class="linkbtn" id="copyConsole" type="button">copy the console version</button> and paste it into DevTools on the shop tab. Or <button class="linkbtn" id="tryDirect" type="button">try a direct sync again</button>.</p>
+      </div>
+    </div>
     <button class="upbtn" id="upBtn" type="button" aria-expanded="false" aria-controls="pop" title="Update from a CSV export">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg><span class="lbl">Update data</span></button>
     <button class="savedbtn" id="savedBtn" type="button" aria-pressed="false">
@@ -464,7 +486,7 @@ const isPL=x=>x.pl??(x.pl=PLRX.test(x.t));
 let imgOK=null; // null unknown, true/false after probe
 let cur=[];
 
-function setSub(){$("sub").textContent=SRC.kind==="builtin"?`BuyFromAuction in-stock list, updated ${fmtD(SRC.asOf)} 2026`:(SRC.deltas&&SRC.deltas.length?`Your list, last updated ${SRC.deltas[SRC.deltas.length-1].loaded} with ${SRC.deltas[SRC.deltas.length-1].name}`:`From your file ${SRC.name}`)}
+function setSub(){const ls=(()=>{try{const v=JSON.parse(localStorage.getItem("bfa-sync")||"{}");return v.bv===BUILTIN.asOf&&v.lastAt?v.lastAt:""}catch(e){return ""}})();if(ls){$("sub").textContent=`Synced with BuyFromAuction ${new Date(ls).toLocaleString("en-IN",{timeZone:"Asia/Kolkata",day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})}`;return}$("sub").textContent=SRC.kind==="builtin"?`BuyFromAuction in-stock list, updated ${fmtD(SRC.asOf)} 2026`:(SRC.deltas&&SRC.deltas.length?`Your list, last updated ${SRC.deltas[SRC.deltas.length-1].loaded} with ${SRC.deltas[SRC.deltas.length-1].name}`:`From your file ${SRC.name}`)}
 
 /* image helpers */
 function imgTag(x){
@@ -757,7 +779,7 @@ function closeAll(){
 }
 $("dClose").onclick=closeAll;$("scrim").onclick=closeAll;
 $("dWide").onclick=()=>$("drawer").classList.toggle("wide");
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("pop").hidden){$("pop").hidden=true;$("upBtn").setAttribute("aria-expanded","false");$("upBtn").focus();return}closeAll()}
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("syncPop").hidden){$("syncPop").hidden=true;$("syncBtn").setAttribute("aria-expanded","false");$("syncBtn").focus();return}if(!$("pop").hidden){$("pop").hidden=true;$("upBtn").setAttribute("aria-expanded","false");$("upBtn").focus();return}closeAll()}
   if(e.key==="Tab"&&$("drawer").classList.contains("on")){const f=[...$("drawer").querySelectorAll("button,a,summary,iframe")].filter(el=>el.offsetParent!==null);if(!f.length)return;
     if(e.shiftKey&&document.activeElement===f[0]){e.preventDefault();f[f.length-1].focus()}else if(!e.shiftKey&&document.activeElement===f[f.length-1]){e.preventDefault();f[0].focus()}}});
 
@@ -814,7 +836,7 @@ async function loadFile(file){
   $("file").value="";
 }
 async function save(){try{await IDB.set("dataset",{rows:pack(items),src:SRC,bv:BUILTIN.asOf})}catch(e){toast("Loaded, but this browser couldn’t keep it for next time.",true)}}
-$("upBtn").onclick=e=>{e.stopPropagation();const p=$("pop");p.hidden=!p.hidden;$("upBtn").setAttribute("aria-expanded",!p.hidden);if(!p.hidden)srcInfo()};
+$("upBtn").onclick=e=>{e.stopPropagation();$("syncPop").hidden=true;const p=$("pop");p.hidden=!p.hidden;$("upBtn").setAttribute("aria-expanded",!p.hidden);if(!p.hidden)srcInfo()};
 document.addEventListener("click",e=>{if(!$("pop").hidden&&!e.target.closest("#pop")&&!e.target.closest("#upBtn")){$("pop").hidden=true;$("upBtn").setAttribute("aria-expanded","false")}});
 $("pick").onclick=()=>$("file").click();
 $("file").onchange=e=>loadFile(e.target.files[0]);
@@ -823,6 +845,93 @@ const drop=$("drop");
 ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("over")}));
 drop.addEventListener("drop",e=>loadFile(e.dataTransfer.files[0]));
 $("resetData").onclick=async()=>{try{await IDB.del("dataset")}catch(e){}setItems(fromBuiltIn(),BUILTIN);toast("Back to the built-in list.")};
+
+/* ---------- Sync with the shop ---------- */
+const SHOP={origin:"https://buyfromauction.in",minPrice:50,maxPrice:159300};
+const SHOP_URL=`${SHOP.origin}/shop/?min_price=${SHOP.minPrice}&max_price=${SHOP.maxPrice}&filter_stock_status=instock`;
+const SYNC_KEY="bfa-sync";
+let syncCtl=null,syncBusy=false,syncMode="new";
+function syncState(){try{const v=JSON.parse(localStorage.getItem(SYNC_KEY)||"{}");return v.bv===BUILTIN.asOf?v:{bv:BUILTIN.asOf}}catch(e){return {bv:BUILTIN.asOf}}}
+function setSyncState(p){try{localStorage.setItem(SYNC_KEY,JSON.stringify(Object.assign(syncState(),p,{bv:BUILTIN.asOf})))}catch(e){}}
+const fmtDT=iso=>{const d=new Date(iso);if(isNaN(d))return "";return d.toLocaleString("en-IN",{timeZone:"Asia/Kolkata",day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})};
+function syncSince(){const s=syncState();if(s.lastAt)return new Date(Date.parse(s.lastAt)-15*60e3).toISOString();return MAXD?`${MAXD}T00:00:00Z`:""}
+function syncInfo(){const s=syncState();
+  $("syncInfo").innerHTML=(s.lastAt?`Last synced <b>${esc(fmtDT(s.lastAt))}</b> (${esc(s.lastMode==="full"?"full refresh":"new items")}).`:`Not synced yet. The first time, run a <b>Full refresh</b> so the list covers the whole shop filter.`)+` Shop filter: in stock, ₹${SHOP.minPrice.toLocaleString("en-IN")} to ₹${SHOP.maxPrice.toLocaleString("en-IN")}.`;
+  $("syncFull").classList.toggle("pri",!s.lastAt);$("syncNew").classList.toggle("pri",!!s.lastAt);
+  $("bridgeNote").hidden=!s.blocked;
+  const ok=!!window.BFASync;$("syncMissing").hidden=ok;$("syncNew").disabled=$("syncFull").disabled=!ok||syncBusy;
+}
+function bookmarkHref(){const src=new URL("bfa-sync.js",location.href).href;
+  return `javascript:(function(){var s=document.createElement('script');s.src=${JSON.stringify(src)}+'?v='+Date.now();s.onerror=function(){alert('Clearance finder: the sync script could not load on this page. Use the console option instead.')};document.documentElement.appendChild(s)})();`}
+function syncProgress(p){const pct=p.total?Math.round(100*p.done/p.total):0;$("syncBar").style.width=pct+"%";$("syncStatus").textContent=`${p.phase}${p.total>1?` (${p.done} of ${p.total})`:""}…`}
+function syncBusyUI(on,msg){syncBusy=on;$("syncProg").hidden=!on&&!msg;$("syncCancel").hidden=!on;if(msg!=null)$("syncStatus").textContent=msg;if(!on)$("syncBar").style.width=msg?"100%":"0";syncInfo()}
+async function startSync(mode){
+  if(syncBusy||!window.BFASync)return;syncMode=mode;
+  const since=mode==="new"?syncSince():"";if(mode==="new"&&!since){mode=syncMode="full"}
+  const s=syncState();
+  if(s.blocked){showBridge(mode,since);return}
+  syncCtl=new AbortController();syncBusyUI(true,"Connecting to the shop…");
+  try{const res=await BFASync.run({origin:SHOP.origin,minPrice:SHOP.minPrice,maxPrice:SHOP.maxPrice,since,signal:syncCtl.signal,onProgress:syncProgress});
+    syncBusyUI(false,"");applySync(mode,res.rows,res.syncedAt,res.warnings);
+  }catch(e){
+    if(e&&e.cancelled){syncBusyUI(false,"Sync cancelled. Nothing was changed.");return}
+    if(e&&e.network){setSyncState({blocked:true});syncBusyUI(false,"");showBridge(mode,since);return}
+    syncBusyUI(false,`Sync failed: ${e&&e.message||e}. Nothing was changed.`);
+  }finally{syncCtl=null}
+}
+function showBridge(mode,since){syncMode=mode;$("bridge").hidden=false;$("bridge").dataset.mode=mode;$("bridge").dataset.since=since||"";
+  $("bmk").href=bookmarkHref();$("syncProg").hidden=true;syncInfo()}
+function openShopTab(){const b=$("bridge");const h=new URLSearchParams({"bfa-mode":b.dataset.mode||"new","bfa-since":b.dataset.since||"","bfa-min":SHOP.minPrice,"bfa-max":SHOP.maxPrice});
+  const w=window.open(`${SHOP_URL}#${h}`,"bfa-shop");
+  syncBusyUI(true,"Waiting for the shop tab. On that tab, click your “BFA Sync” bookmark.");$("syncCancel").hidden=false;
+  if(!w)syncBusyUI(false,"Your browser blocked the new tab. Allow pop-ups for this page and try again.")}
+async function copyConsole(){try{const code=await (await fetch(new URL("bfa-sync.js",location.href).href,{cache:"no-store"})).text();
+  await navigator.clipboard.writeText(`window.__BFA_PAGE_ORIGIN=${JSON.stringify(location.origin)};\n${code}`);toast("Copied. Paste it into the console on the shop tab and press Enter.")}catch(e){toast("Couldn’t copy the script. Open bfa-sync.js from this site and copy it by hand.",true)}}
+window.addEventListener("message",e=>{
+  if(!/^https:\/\/(www\.)?buyfromauction\.in$/.test(e.origin))return;const d=e.data;if(!d||d.source!=="bfa-sync")return;
+  if(d.type==="progress"){if(!syncBusy)syncBusyUI(true,"");syncProgress(d);return}
+  if(d.type==="error"){syncBusyUI(false,`The shop tab reported: ${String(d.message||"an error").slice(0,200)}. Nothing was changed.`);return}
+  if(d.type==="result"&&Array.isArray(d.rows)){syncBusyUI(false,"");$("bridge").hidden=true;applySync(d.mode==="full"?"full":"new",d.rows,typeof d.syncedAt==="string"?d.syncedAt:new Date().toISOString(),Array.isArray(d.warnings)?d.warnings.map(String):[])}
+});
+function cleanSyncRows(rows){const out=[];
+  for(const r of rows.slice(0,60000)){if(!r||typeof r!=="object")continue;
+    const t=String(r.t||"").replace(/\s+/g," ").trim().slice(0,300),s=Math.round(Number(r.s)),rg=Math.round(Number(r.r)),u=String(r.u||"");
+    if(!t||!(s>0)||!(rg>0)||!/^https:\/\/(www\.)?buyfromauction\.in\//.test(u))continue;
+    const img=/^https:\/\/[^\s"'<>]+$/.test(String(r.img||""))?String(r.img):"";const pub=/^\d{4}-\d{2}-\d{2}/.test(String(r.pub||""))?String(r.pub).slice(0,10):"";
+    out.push({t,s,r:Math.max(rg,s),u,img,pub})}
+  return out}
+function groupSyncRows(rows){const groups=new Map(),seen=new Set();
+  for(const x of rows){if(seen.has(x.u))continue;seen.add(x.u);const key=gkey(x);const g=groups.get(key);
+    if(g){g.us.push(x.u);if(x.pub&&x.pub>g.pub){g.pub=x.pub;g.u=x.u;if(x.img)g.img=x.img}else if(!g.img&&x.img)g.img=x.img}
+    else groups.set(key,{t:x.t,s:x.s,r:x.r,u:x.u,us:[x.u],img:x.img,pub:x.pub})}
+  return [...groups.values()].map(enrichRaw)}
+async function applySync(mode,rawRows,syncedAt,warnings){
+  const rows=cleanSyncRows(rawRows);const groups=groupSyncRows(rows);const when=fmtDT(syncedAt);
+  if(mode==="full"){
+    if(!groups.length){toast("The shop returned no products, so your list was left as it is.",true);return}
+    const prev=new Set();items.forEach(x=>x.us.forEach(u=>prev.add(u)));
+    const list=finish(groups.map(g=>({...g,upd:g.us.some(u=>!prev.has(u))})));
+    const fresh=list.filter(x=>x.upd).length;const now=new Set(rows.map(r=>r.u));const gone=items.filter(x=>!x.us.some(u=>now.has(u))).length;
+    setItems(list,{kind:"file",name:`Full sync ${when}`,base:`a full sync on ${when}`,deltas:[],loaded:when,used:rows.length,skipped:0},fresh>0);
+    await save();setSyncState({lastAt:syncedAt,lastMode:"full"});setSub();
+    toast(`Full refresh done: ${list.length.toLocaleString("en-IN")} items in stock, ${fresh.toLocaleString("en-IN")} new since your last list, ${gone.toLocaleString("en-IN")} sold out or removed.${warnings.length?" "+warnings[0]:""}`);
+  }else{
+    const m=mergeDelta(items,groups);
+    const base=SRC.kind==="builtin"?"builtin":(SRC.base||SRC.name);
+    const deltas=[...(SRC.deltas||[]),{name:`Sync ${when}`,loaded:when.split(",")[0],added:m.added,updated:m.updated}].slice(-20);
+    setItems(m.list,{kind:"file",name:`Sync ${when}`,base,deltas,loaded:when,used:rows.length,skipped:0},m.added+m.updated+m.units>0);
+    await save();setSyncState({lastAt:syncedAt,lastMode:"new"});setSub();
+    toast(m.added+m.updated+m.units?`Synced: ${m.added.toLocaleString("en-IN")} new item${m.added===1?"":"s"}${m.units?`, ${m.units} extra units`:""}${m.updated?`, ${m.updated} repriced`:""}. Showing what’s new.${warnings.length?" "+warnings[0]:""}`:"Synced: no new products since your last sync.");
+  }
+  syncInfo();
+}
+$("syncBtn").onclick=e=>{e.stopPropagation();const p=$("syncPop");p.hidden=!p.hidden;$("syncBtn").setAttribute("aria-expanded",!p.hidden);if(!p.hidden){$("pop").hidden=true;syncInfo()}};
+document.addEventListener("click",e=>{if(!$("syncPop").hidden&&!e.target.closest("#syncPop")&&!e.target.closest("#syncBtn")){$("syncPop").hidden=true;$("syncBtn").setAttribute("aria-expanded","false")}});
+$("syncNew").onclick=()=>startSync("new");$("syncFull").onclick=()=>startSync("full");
+$("syncCancel").onclick=()=>{if(syncCtl)syncCtl.abort();else syncBusyUI(false,"Stopped waiting for the shop tab.")};
+$("openShop").onclick=openShopTab;$("copyConsole").onclick=copyConsole;
+$("tryDirect").onclick=()=>{setSyncState({blocked:false});$("bridge").hidden=true;startSync(syncMode)};
+$("bmk").addEventListener("click",e=>{e.preventDefault();toast("Drag this button to your bookmarks bar instead of clicking it here.")});
 
 items=fromBuiltIn();probe();setSub();buildCats();buildFilters();buildRail();render(true);srcInfo();
 (async()=>{try{const v=await IDB.get("dataset");if(v&&v.rows&&v.rows.length&&v.bv!==BUILTIN.asOf){await IDB.del("dataset");toast(`The built-in list is now the ${fmtD(BUILTIN.asOf)} export, so earlier uploads were cleared. Add new deltas on top of it.`)}
