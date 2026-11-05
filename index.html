@@ -386,11 +386,15 @@ function parseCSV(t){const out=[];let r=[],f="",q=false;for(let i=0;i<t.length;i
   else if(c==='"')q=true;else if(c===","){r.push(f);f=""}else if(c==="\n"||c==="\r"){if(c==="\r"&&t[i+1]==="\n")i++;r.push(f);f="";out.push(r);r=[]}else f+=c}
   if(f!==""||r.length){r.push(f);out.push(r)}return out}
 function sheetToData(csv){const t=parseCSV(csv).filter(r=>r.some(x=>x.trim()));if(t.length<2)throw new Error("The sheet is empty or not shared with 'Anyone with the link'");
-  const h=t[0].map(x=>x.trim().toLowerCase()),col=rx=>h.findIndex(x=>rx.test(x));
-  const ci={t:col(/^(title|name|product)/),s:col(/(sale|auction|our|selling|^price)/),r:col(/(regular|mrp|retail|original)/),c:col(/categor/),u:col(/(slug|url|link)/),i:col(/(image|img|photo)/),p:col(/(publish|date|added)/)};
-  if(ci.t<0||ci.s<0||ci.r<0)throw new Error("Sheet needs header columns for title, sale price and regular price (MRP)");
+  const h=t[0].map(x=>x.trim().toLowerCase()),col=rx=>h.findIndex(x=>rx.test(x)),body=t.slice(1,301);
+  const isNum=v=>/^[\d\s.,₹$-]*$/.test(v||"");
+  const textScore=i=>{const v=body.map(r=>(r[i]||"").trim()).filter(Boolean);if(!v.length)return 0;return v.filter(x=>!isNum(x)&&!/^https?:/i.test(x)).length/v.length*v.reduce((a,x)=>a+x.length,0)/v.length};
+  let tc=h.findIndex(x=>/(title|name|desc)/.test(x)&&!/(\bid\b|sku|number|code|\bno\b)/.test(x));
+  if(tc<0||textScore(tc)<8){let best=-1,bs=0;h.forEach((_,i)=>{const sc=textScore(i);if(sc>bs){bs=sc;best=i}});if(best>=0)tc=best}
+  const ci={t:tc,s:col(/(sale|auction|our|selling|^price|current)/),r:col(/(regular|mrp|retail|original|list)/),c:col(/categor/),u:col(/(slug|url|link)/),i:col(/(image|img|photo|picture)/),p:col(/(publish|date|added)/)};
+  if(ci.t<0||ci.s<0||ci.r<0)throw new Error("Sheet headers seen: "+t[0].join(" | ")+". Need title, sale price and regular price (MRP) columns");
   const num=v=>+String(v||"").replace(/[^\d.]/g,"")||0,g=(x,k)=>ci[k]>=0?(x[ci[k]]||"").trim():"";
-  const rows=t.slice(1).filter(x=>g(x,"t")).map(x=>{const pub=g(x,"p").match(/\d{4}-\d{2}-\d{2}/);return [g(x,"t"),num(g(x,"s")),num(g(x,"r"))||num(g(x,"s")),g(x,"c")||"Other",g(x,"u"),g(x,"i"),1,0,pub?pub[0]:"",-1,0]});
+  const rows=t.slice(1).filter(x=>g(x,"t")).map(x=>{const pub=g(x,"p").match(/\d{4}-\d{2}-\d{2}/);return [g(x,"t"),num(g(x,"s")),num(g(x,"r"))||num(g(x,"s")),g(x,"c")||catOf(g(x,"t")),g(x,"u"),g(x,"i"),1,0,pub?pub[0]:"",-1,0]});
   return {asOf:new Date().toISOString().slice(0,10),rows,enr:[]}}
 async function loadData(){const d=resolveDataUrl();const r=await fetch(d.url,{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);
   if(d.sheet||/\.csv(\?|$)/i.test(d.url))return sheetToData(await r.text());
