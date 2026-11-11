@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BuyFromAuction Deal Watcher
 // @namespace    bfa-deal-watcher
-// @version      2.0.1
-// @description  Polls the BuyFromAuction store API every minute and alerts when a watched product is in stock.
+// @version      2.0.2
+// @description  Polls the BuyFromAuction store API every 10 seconds from noon until 7 PM local time and alerts when a watched product is in stock.
 // @match        https://buyfromauction.in/*
 // @match        https://www.buyfromauction.in/*
 // @match        http://buyfromauction.in/*
@@ -122,13 +122,9 @@
     // watcher sleeps and sends no requests. everyMin = minutes between checks in that window.
     // Set activeHours: [] to watch all day every intervalSec instead.
     activeHours: [
-      { from: '12:00', to: '13:00', everyMin: 2 },
-      { from: '13:00', to: '14:00', everyMin: 1 },
-      { from: '14:00', to: '15:00', everyMin: 2 },
-      { from: '15:00', to: '16:00', everyMin: 5 },
-      { from: '16:00', to: '17:00', everyMin: 5 },
+      { from: '12:00', to: '19:00', everyMin: 10 / 60 },
     ],
-    intervalSec: 60,        // how often to poll when activeHours is empty
+    intervalSec: 10,        // how often to poll when activeHours is empty
     latestPages: 2,         // most pages of newest listings read per check (page 2 only if page 1 is all new)
     fullScanEveryMin: 10,   // category + search requests for every rule run this often (and on "Check now")
     perPage: 100,
@@ -726,7 +722,8 @@
     noteEl.hidden = !notes.length;
     noteEl.textContent = notes.join(' ');
     const win = windowAt();
-    const paceTxt = win?.end ? ` Checking every ${win.everyMin} min until ${win.end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
+    const pace = win && (win.everyMin < 1 ? `${win.everyMin * 60} sec` : `${win.everyMin} min`);
+    const paceTxt = win?.end ? ` Checking every ${pace} until ${win.end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
     st.textContent = !win && !running
       ? `Outside watch hours (${hoursSummary()}). Sleeping until ${new Date(nextAt || nextWindowStart()).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}. "Check now" still works.`
       : status.standby

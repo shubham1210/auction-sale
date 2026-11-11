@@ -8,6 +8,9 @@ A shopping-style page for browsing BuyFromAuction’s in-stock listings, with fi
 |---|---|
 | `index.html` | The page. It includes the 23 October 2026 export as its starting list. |
 | `bfa-sync.js` | The sync engine. The page uses it for the Sync button, and the “BFA Sync” bookmark loads it on the shop’s tab. Keep it in the same folder as `index.html`. |
+| `flash-sale-capture.js` | The deal watcher userscript. Checks newest listings every 10 seconds from noon until 7 PM in your computer's local time; full category/search checks run every 10 minutes. |
+
+Keep a buyfromauction.in tab open for the deal watcher to run. Checks do not overlap, so a slow scan can take longer than 10 seconds; blocked requests retain the existing retry backoff. Update or reinstall the userscript to apply schedule changes.
 
 ## Put it on GitHub Pages
 
