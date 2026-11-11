@@ -125,6 +125,14 @@
       { from: '12:00', to: '19:00', everyMin: 10 / 60 },
     ],
     intervalSec: 10,        // how often to poll when activeHours is empty
+    // Slow down while the shop is quiet: after `afterMin` with no listing added, sold or repriced,
+    // the gap between checks moves to the next entry of `stepsMin` and stays on the last one.
+    // Any change (or "Check now") drops straight back to the normal pace. Editable from the panel.
+    idleBackoff: {
+      enabled: true,
+      afterMin: 5,
+      stepsMin: [1, 2, 4, 8, 16, 30],
+    },
     latestPages: 2,         // most pages of newest listings read per check (page 2 only if page 1 is all new)
     fullScanEveryMin: 10,   // category + search requests for every rule run this often (and on "Check now")
     perPage: 100,
@@ -321,6 +329,18 @@
   const VERSION = '2.0.0';
   if (state.ver !== VERSION) { state.level = 0; delete state.botParams; state.ver = VERSION; save(); }
 
+  // Pace settings the panel can change, kept per browser.
+  const DEFAULT_TUNING = { intervalSec: SETTINGS.intervalSec, idleBackoff: { ...SETTINGS.idleBackoff, stepsMin: [...SETTINGS.idleBackoff.stepsMin] } };
+  function applyTuning(t) {
+    if (!t) return;
+    if (t.intervalSec > 0) {
+      SETTINGS.intervalSec = t.intervalSec;
+      (SETTINGS.activeHours || []).forEach((w) => { w.everyMin = t.intervalSec / 60; });   // same pace in every watch window
+    }
+    if (t.idleBackoff) Object.assign(SETTINGS.idleBackoff, t.idleBackoff);
+  }
+  applyTuning(state.tuning);
+
   const rules = () => [...WATCHLIST, ...state.extraRules];
   let timer = null, running = false, blockedStreak = 0, nextAt = null;
   let tickStarted = 0, lastDone = Date.now(), pausedNote = '', pausedUntil = 0, lastInput = Date.now();
@@ -331,12 +351,37 @@
   const skipUntil = {};            // query key -> timestamp; queries the site keeps refusing
   let lastSeenIds = new Set();     // listings read from the newest-listings feed in the last check
   let lastFull = 0;                // time of the last full check
+  let idleStep = 0, idleSig = '', stepAt = 0, quietSince = 0;   // adaptive pace while nothing changes
+
+  const idleMs = () => {
+    const steps = SETTINGS.idleBackoff?.stepsMin || [];
+    return idleStep ? steps[Math.min(idleStep, steps.length) - 1] * 60000 : 0;
+  };
+  const fmtEvery = (ms) => (ms < 60000 ? `${Math.round(ms / 1000)} sec` : `${Math.round(ms / 6000) / 10} min`);
+
+  // Any listing added, sold or repriced on the newest-listings pages counts as activity; while the
+  // feed stands still the gap between checks climbs one rung of stepsMin per quiet afterMin.
+  function updatePace(sig) {
+    const cfg = SETTINGS.idleBackoff || {};
+    const steps = cfg.stepsMin || [];
+    const now = Date.now();
+    if (!cfg.enabled || !steps.length || !sig) { idleStep = 0; return; }
+    if (sig !== idleSig) {
+      if (idleStep) console.info('[BFA watcher] listings changed; back to the normal pace');
+      idleSig = sig; idleStep = 0; stepAt = now; quietSince = now;
+      return;
+    }
+    if (now - stepAt >= (cfg.afterMin ?? 5) * 60000 && idleStep < steps.length) {
+      idleStep++; stepAt = now;
+      console.info(`[BFA watcher] nothing new for ${cfg.afterMin} min; checking every ${steps[idleStep - 1]} min now`);
+    }
+  }
 
   function haveLock() {
     const now = Date.now();
     let l = null;
     try { l = JSON.parse(localStorage.getItem(LOCK) || 'null'); } catch {}
-    if (!l || l.tab === TAB || now - l.ts > longestIntervalMs() * 2.5) {
+    if (!l || l.tab === TAB || now - l.ts > Math.max(longestIntervalMs(), idleMs()) * 2.5) {
       localStorage.setItem(LOCK, JSON.stringify({ tab: TAB, ts: now }));
       return true;
     }
@@ -447,9 +492,11 @@
       // (compared by listing, not by ID number — the shop's IDs don't always follow publish order).
       const prevSeen = lastSeenIds, seenNow = new Set();
       let newCount = 0;
+      const feed = [];
       for (let page = 1; page <= pages * 2; page++) {    // ×2 covers the 50-per-page fallback
         const r = await grab({ page });
         if (!r || !r.items.length) break;
+        feed.push(...r.items);
         const fresh = r.items.filter((p) => !prevSeen.has(p.id)).length;
         if (prevSeen.size) newCount += fresh;
         r.items.forEach((p) => seenNow.add(p.id));
@@ -468,6 +515,7 @@
         return;
       }
       blockedStreak = 0;
+      updatePace(feed.map((p) => `${p.id}:${p.prices?.price}:${p.is_in_stock ? 1 : 0}`).join(','));
       if (full) {
         for (const rule of rules()) for (const q of queriesFor(rule)) await grab(q, { skipOnFail: true });
         lastFull = Date.now();
@@ -484,6 +532,7 @@
       const fresh = matches.filter((m) => !state.alerted[m.p.id]);
       fresh.forEach((m) => { state.alerted[m.p.id] = Date.now(); m.fresh = true; });
       save();
+      if (fresh.length) { idleStep = 0; stepAt = quietSince = Date.now(); }   // a match found by a search counts as activity too
       if (full) {
         current = matches;
       } else {
@@ -680,7 +729,14 @@
   #bfa-w header .co{color:inherit;font-size:12px;font-weight:600;text-decoration:underline;margin-right:2px}
   #bfa-w .empty{padding:14px 12px;color:var(--muted);font-size:13px}
   #bfa-w .note{padding:8px 12px;font-size:12px;color:var(--stamp);border-bottom:1px solid var(--line)}
-  #bfa-w.min .st,#bfa-w.min .list{display:none}`;
+  #bfa-w .cfg{padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;display:grid;gap:7px}
+  #bfa-w .cfg label{display:flex;align-items:center;gap:6px}
+  #bfa-w .cfg input[type=number]{width:62px}
+  #bfa-w .cfg input[type=text]{flex:1;min-width:0}
+  #bfa-w .cfg input{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:5px;padding:2px 5px}
+  #bfa-w .cfg .row{display:flex;align-items:center;gap:8px}
+  #bfa-w .cfg .hint{color:var(--muted)}
+  #bfa-w.min .st,#bfa-w.min .list,#bfa-w.min .cfg{display:none}`;
 
   let root;
   function mount() {
@@ -688,12 +744,23 @@
     const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
     root = document.createElement('div'); root.id = 'bfa-w';
     root.innerHTML = `<header><strong>Deal watcher</strong>
-      <a class="co" href="/checkout/" target="_blank" rel="noopener">Checkout</a><button data-a="alerts">Enable alerts</button><button data-a="scan">Check now</button><button data-a="min">Hide</button></header>
-      <div class="note" hidden></div><div class="st"></div><div class="list"></div>`;
+      <a class="co" href="/checkout/" target="_blank" rel="noopener">Checkout</a><button data-a="alerts">Enable alerts</button><button data-a="scan">Check now</button><button data-a="cfg">Pace</button><button data-a="min">Hide</button></header>
+      <div class="note" hidden></div>
+      <div class="cfg" hidden>
+        <label>Check every <input name="intervalSec" type="number" min="5" max="3600" step="1"> sec</label>
+        <label><input name="idleEnabled" type="checkbox"> Slow down while the shop is quiet</label>
+        <label>after <input name="afterMin" type="number" min="1" max="240" step="1"> min with nothing new</label>
+        <label>steps <input name="stepsMin" type="text" inputmode="numeric" placeholder="1, 2, 4, 8, 16, 30"> min</label>
+        <div class="row"><button data-a="save">Save</button><button data-a="defaults">Defaults</button><span class="hint"></span></div>
+      </div>
+      <div class="st"></div><div class="list"></div>`;
     root.addEventListener('click', (e) => {
       const btn = e.target.closest('button');
       const a = btn?.dataset.a;
-      if (a === 'scan') tick({ full: true });
+      if (a === 'scan') { idleStep = 0; stepAt = Date.now(); tick({ full: true }); }
+      if (a === 'cfg') { const c = root.querySelector('.cfg'); c.hidden = !c.hidden; if (!c.hidden) fillCfg(); }
+      if (a === 'save') saveCfg(readCfg());
+      if (a === 'defaults') saveCfg(DEFAULT_TUNING);
       if (a === 'cart') {
         const m = current.find((x) => String(x.p.id) === btn.dataset.id);
         if (m) { btn.disabled = true; btn.textContent = 'Adding…'; addToCart(m.p).then((r) => { m.cart = r.ok ? 'in cart' : `not added: ${r.why}`; render(); }); }
@@ -705,6 +772,38 @@
       }
     });
     document.body.appendChild(root);
+  }
+
+  const cfgEl = (name) => root.querySelector(`.cfg [name="${name}"]`);
+  function fillCfg() {
+    cfgEl('intervalSec').value = SETTINGS.intervalSec;
+    cfgEl('idleEnabled').checked = !!SETTINGS.idleBackoff.enabled;
+    cfgEl('afterMin').value = SETTINGS.idleBackoff.afterMin;
+    cfgEl('stepsMin').value = (SETTINGS.idleBackoff.stepsMin || []).join(', ');
+  }
+  const clamp = (v, lo, hi, fallback) => (Number.isFinite(+v) && +v ? Math.min(hi, Math.max(lo, +v)) : fallback);
+  function readCfg() {
+    const steps = cfgEl('stepsMin').value.split(/[,\s]+/).map(Number).filter((n) => n > 0 && n <= 720);
+    return {
+      intervalSec: clamp(cfgEl('intervalSec').value, 5, 3600, SETTINGS.intervalSec),
+      idleBackoff: {
+        enabled: cfgEl('idleEnabled').checked,
+        afterMin: clamp(cfgEl('afterMin').value, 1, 240, SETTINGS.idleBackoff.afterMin),
+        stepsMin: steps.length ? [...new Set(steps)].sort((a, b) => a - b) : DEFAULT_TUNING.idleBackoff.stepsMin,
+      },
+    };
+  }
+  function saveCfg(tuning) {
+    state.tuning = JSON.parse(JSON.stringify(tuning)); save();
+    applyTuning(state.tuning);
+    idleStep = 0; stepAt = Date.now();
+    schedule(Math.max(1000, nextDelay() - (Date.now() - lastDone)));
+    if (root) {
+      fillCfg();
+      const hint = root.querySelector('.cfg .hint');
+      if (hint) hint.textContent = `Saved at ${new Date().toLocaleTimeString()}`;
+    }
+    render();
   }
 
   const esc = (s) => decode(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -722,8 +821,9 @@
     noteEl.hidden = !notes.length;
     noteEl.textContent = notes.join(' ');
     const win = windowAt();
-    const pace = win && (win.everyMin < 1 ? `${win.everyMin * 60} sec` : `${win.everyMin} min`);
+    const pace = win && fmtEvery(Math.max(win.everyMin * 60000, idleMs()));
     const paceTxt = win?.end ? ` Checking every ${pace} until ${win.end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
+    const quietTxt = idleStep && quietSince ? ` Quiet since ${new Date(quietSince).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, so checks are slower; they speed up on the first change.` : '';
     st.textContent = !win && !running
       ? `Outside watch hours (${hoursSummary()}). Sleeping until ${new Date(nextAt || nextWindowStart()).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}. "Check now" still works.`
       : status.standby
@@ -734,7 +834,7 @@
         ? `The site refused every request (HTTP 403). Retrying at ${nextTxt}. Run BFA.probe() in the console to see which requests it allows.`
       : status.last
         ? `${status.full ? 'Full check' : 'Quick check'} at ${status.last.toLocaleTimeString()} (${status.requests} request${status.requests === 1 ? '' : 's'}${status.newCount != null ? `, ${status.newCount} new listing${status.newCount === 1 ? '' : 's'} since last check` : ''}): ${current.length} match${current.length === 1 ? '' : 'es'}` +
-          (status.errors ? `, ${status.errors} request(s) refused (see console)` : '') + `. Next check at ${nextTxt}.` + paceTxt
+          (status.errors ? `, ${status.errors} request(s) refused (see console)` : '') + `. Next check at ${nextTxt}.` + paceTxt + quietTxt
         : 'First check running…';
     const list = root.querySelector('.list');
     if (!current.length) {
@@ -770,7 +870,17 @@
     unwatch(id) { state.extraRules = state.extraRules.filter((r) => r.id !== id); save(); tick({ full: true }); return rules().map((r) => r.id); },
     rules,
     matches: () => current.map(({ p, rule, note }) => ({ watch: rule.label, name: decode(p.name), price: money(p, 'price'), detail: note, link: p.permalink })),
-    scanNow: () => tick({ full: true }),
+    scanNow: () => { idleStep = 0; stepAt = Date.now(); return tick({ full: true }); },
+    /** Read or change the pace, e.g. BFA.pace({ intervalSec: 15, idleBackoff: { stepsMin: [1, 5, 30] } }). */
+    pace(t) {
+      if (t) saveCfg({ intervalSec: t.intervalSec || SETTINGS.intervalSec, idleBackoff: { ...SETTINGS.idleBackoff, ...(t.idleBackoff || {}) } });
+      return {
+        intervalSec: SETTINGS.intervalSec,
+        idleBackoff: SETTINGS.idleBackoff,
+        checkingEvery: fmtEvery(Math.max((windowAt()?.everyMin ?? SETTINGS.intervalSec / 60) * 60000, idleMs())),
+        idleStep,
+      };
+    },
     // Test add-to-cart with any product id (it really adds it; remove it from the cart after).
     addToCart: (id) => addToCart({ id }),
     test: (name) => parseSpecs(name),
@@ -798,7 +908,7 @@
   };
 
   const nextDelay = () => {
-    const every = (windowAt()?.everyMin ?? SETTINGS.intervalSec / 60) * 60000;
+    const every = Math.max((windowAt()?.everyMin ?? SETTINGS.intervalSec / 60) * 60000, idleMs());
     return blockedStreak ? Math.min(SETTINGS.maxBackoffMin * 60000, every * 2 ** blockedStreak) : every;
   };
   // Outside watch hours: no requests until the next window opens.
@@ -833,10 +943,14 @@
   // A frozen tab, a sleeping computer or a lost connection pauses the watcher silently. These
   // checks notice when a scheduled check is overdue and catch up straight away with a full check.
   const fmtDur = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+  // A full check can legitimately run for minutes (one request per rule query, each retried
+  // through every variant), so only call it stalled well past that worst case.
+  const stallMs = () => Math.max(5 * 60000, SETTINGS.requestTimeoutSec * 1000 * VARIANTS.length * 3);
+  const overdueMs = () => Math.max(60000, nextDelay() * 3);
   function catchUp(reason) {
     if (timer === null) return;                                       // stopped by BFA.stop()
-    if (running && Date.now() - tickStarted > 2 * 60000) running = false;   // a check that never finished
-    if (running || !nextAt || Date.now() - nextAt < 60000) return;    // on schedule
+    if (running && Date.now() - tickStarted > stallMs()) running = false;   // a check that never finished
+    if (running || !nextAt || Date.now() - nextAt < overdueMs()) return;    // on schedule
     if (!windowAt()) { sleepUntilWindow(); return; }                  // woke up outside watch hours
     const gap = Date.now() - lastDone;
     setNote(`Watcher was paused for ${fmtDur(gap)} (${reason}); caught up at ${new Date().toLocaleTimeString()}.`);
